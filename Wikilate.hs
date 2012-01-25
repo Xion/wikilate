@@ -5,19 +5,28 @@
 module Wikilate where 
 
 
-import Data.List (intersperse)
+import Control.Monad (when)
+import Data.Maybe (fromJust)
+import Data.List (intercalate, intersperse)
 import Text.Regex (mkRegex, splitRegex)
 import System.Environment (getArgs)
 import System.Console.GetOpt
 import Network.HTTP.Base (urlEncodeVars)
+import Network.HTTP
+import Network.URI
 
 
 -- Main function
 
 main = do
 	argv <- getArgs
-	(flags, args) <- parseCmdLineArgs argv
-	print (flags, args)
+	(opts, args) <- parseCmdLineArgs argv
+
+	when (length args < 1) $ error "No phrase specified."
+	let phrase = head args
+
+	translations <- fetchTranslations phrase opts
+	putStrLn translations
 
 
 -- Program options & command line
@@ -26,7 +35,6 @@ data Options = Options
 	{ optSourceLang :: String
 	, optDestLangs :: [String]
 	}
-	deriving (Show)	-- for debugging
 
 defaultOptions = Options
 	{ optSourceLang = "en"
@@ -53,14 +61,34 @@ parseCmdLineArgs args =
 		header = "Usage: wikilate [OPTION...] phrase"
 
 
--- Actual logic
+-- Translating
 
-wikipediaUrl :: String -> String -> String
+newtype Translations = T [(String, String)]
+instance Show Translations where
+	show (T transAL) =
+		intercalate "\n" $ translationsLines
+		where translationsLines = map (\(lang, tr) -> lang ++ ": " ++ tr) transAL
+
+fetchTranslations :: String -> Options -> IO String
+fetchTranslations phrase opts = do
+	let url = wikipediaUrl (optSourceLang opts) phrase
+	let request = Request { rqURI = url, rqMethod = GET,
+							rqHeaders = [], rqBody = "" }
+	response <- simpleHTTP request
+	case response of
+		Left err -> error $ "Error connecting to Wikipedia: " ++ show err
+		Right rsp ->
+			case rspCode rsp of
+				(2,_,_) -> return $ rspBody rsp
+				otherwise -> error $ "Invalid HTTP response: " ++ show (rspCode rsp)
+
+
+wikipediaUrl :: String -> String -> URI
 wikipediaUrl sourceLang phrase =
-	concat ["http://", sourceLang, ".wikipedia.org/w/api.php?", urlEncodeVars urlArgs]
+	fromJust $ parseURI url
 	where
-		urlArgs = [("action", "query"), ("prop", "langlinks"), ("titles", phrase)]
-
+		url = concat ["http://", sourceLang, ".wikipedia.org/w/api.php?", urlEncodeVars urlArgs]
+		urlArgs = [("action", "query"), ("prop", "langlinks"), ("format", "json"), ("titles", phrase)]
 
 
 
