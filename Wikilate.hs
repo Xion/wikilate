@@ -5,10 +5,11 @@
 module Wikilate where 
 
 
-import Control.Monad (when)
+import Control.Monad (when, mapM, liftM)
 import Data.Maybe (fromJust)
 import Data.List (intercalate, intersperse)
 import Text.Regex (mkRegex, splitRegex)
+import Text.JSON
 import System.Environment (getArgs)
 import System.Console.GetOpt
 import Network.HTTP.Base (urlEncodeVars)
@@ -26,7 +27,7 @@ main = do
 	let phrase = head args
 
 	translations <- fetchTranslations phrase opts
-	putStrLn translations
+	print translations
 
 
 -- Program options & command line
@@ -61,15 +62,16 @@ parseCmdLineArgs args =
 		header = "Usage: wikilate [OPTION...] phrase"
 
 
--- Translating
+-- Retrieving translations
 
-newtype Translations = T [(String, String)]
+newtype Translations = Translations [(String, String)]
+
 instance Show Translations where
-	show (T transAL) =
+	show (Translations transAL) =
 		intercalate "\n" $ translationsLines
 		where translationsLines = map (\(lang, tr) -> lang ++ ": " ++ tr) transAL
 
-fetchTranslations :: String -> Options -> IO String
+fetchTranslations :: String -> Options -> IO Translations
 fetchTranslations phrase opts = do
 	let url = wikipediaUrl (optSourceLang opts) phrase
 	let request = Request { rqURI = url, rqMethod = GET,
@@ -79,9 +81,8 @@ fetchTranslations phrase opts = do
 		Left err -> error $ "Error connecting to Wikipedia: " ++ show err
 		Right rsp ->
 			case rspCode rsp of
-				(2,_,_) -> return $ rspBody rsp
+				(2,_,_) -> return . parseWikipediaResponse $ rspBody rsp
 				otherwise -> error $ "Invalid HTTP response: " ++ show (rspCode rsp)
-
 
 wikipediaUrl :: String -> String -> URI
 wikipediaUrl sourceLang phrase =
@@ -90,6 +91,36 @@ wikipediaUrl sourceLang phrase =
 		url = concat ["http://", sourceLang, ".wikipedia.org/w/api.php?", urlEncodeVars urlArgs]
 		urlArgs = [("action", "query"), ("prop", "langlinks"), ("format", "json"), ("titles", phrase)]
 
+
+-- Parsing translations
+
+parseWikipediaResponse :: String -> Translations
+parseWikipediaResponse response =
+	case readWikipediaJson response of
+		Ok t -> t
+		Error msg -> Translations $ []
+	where
+		readWikipediaJson jsonString = let (!) = flip valFromObj in do
+			json <- decode jsonString
+			query <- json ! "query"
+			pages <- query ! "pages"
+			let page = anySubobject pages
+			let langlinks = lookup "langlinks" $ fromJSObject page
+			readJSON . fromJust $ langlinks
+		anySubobject jsonObj = subObj
+			where (_, (JSObject subObj)) = head $ fromJSObject jsonObj
+			
+
+instance JSON Translations where
+	readJSON (JSArray jsonTrans) =
+		liftM Translations $ mapM readJSONTranslation jsonTrans
+		where
+			readJSONTranslation (JSObject jt) = do
+				langId <- jt ! "lang"
+				translated <- jt ! "*"
+				return (langId, translated)
+			(!) = flip valFromObj
+	showJSON = undefined
 
 
 -- Utilities
