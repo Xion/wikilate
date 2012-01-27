@@ -1,0 +1,13 @@
+Name:               wikilate
+Version:            0.1
+Description:        Command-line translator which uses Wikipedia as dictionary
+License:            MIT
+Author:             Karol Kuczmarski "Xion" <karol.kuczmarski@gmail.com>
+Maintainer:         Karol Kuczmarski "Xion" <karol.kuczmarski@gmail.com>
+Stability:          experimental
+Build-Type:         Simple
+Cabal-Version:      >=1.6
+
+Executable wikilate
+    Main-is:        Wikilate.hs
+    Build-Depends:  base, regex-compat, network, HTTP, json

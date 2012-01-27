@@ -2,7 +2,7 @@
 -- Translates given phrase using different language versions of Wikipedia
 
 
-module Wikilate where 
+module Main where 
 
 
 import Prelude hiding (catch)
@@ -22,6 +22,7 @@ import Network.URI
 
 -- Main function
 
+main :: IO ()
 main = do
     argv <- getArgs
     (opts, args) <- parseCmdLineArgs argv
