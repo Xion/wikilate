@@ -27,7 +27,7 @@ main = do
     (opts, args) <- parseCmdLineArgs argv
 
     when (length args < 1) $ error "No phrase specified."
-    let phrase = head args
+    let phrase = intercalate " " args
 
     catch (fetchTranslations phrase opts >>= print) $ \e ->
         putStrLn $ "<Could not obtain translations: " ++ (show (e :: IOException)) ++ ">"
@@ -172,5 +172,3 @@ splitBy delim =
     where
         regexDelim = mkRegex $ escapeChars delim
         escapeChars = ('\\':) . intersperse '\\'
-
-
