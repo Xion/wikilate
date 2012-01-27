@@ -79,30 +79,55 @@ instance Show Translations where
 
 fetchTranslations :: String -> Options -> IO Translations
 fetchTranslations phrase opts = do
-    let url = wikipediaUrl (optSourceLang opts) phrase
-    let request = Request { rqURI = url, rqMethod = GET,
-                            rqHeaders = [], rqBody = "" }
-    response <- simpleHTTP request
-    case response of
-        Left err -> error $ "Error connecting to Wikipedia: " ++ show err
-        Right rsp ->
-            case rspCode rsp of
-                (2,_,_) -> return . parseWikipediaResponse $ rspBody rsp
-                otherwise -> error $ "Invalid HTTP response: " ++ show (rspCode rsp)
+    fetchTranslationsPart (optSourceLang opts) phrase Nothing
+    where
+        fetchTranslationsPart :: String -> String -> Maybe String -> IO Translations
+        fetchTranslationsPart sourceLang phrase continue = do
+            let url = wikipediaUrl sourceLang phrase continue
+            let request = Request { rqURI = url, rqMethod = GET,
+                                    rqHeaders = [], rqBody = "" }
+            response <- simpleHTTP request
+            case response of
+                Left err -> error $ "Error connecting to Wikipedia: " ++ show err
+                Right rsp ->
+                    case rspCode rsp of
+                        (2,_,_) -> do
+                            let translations = parseTranslations $ rspBody rsp
+                            case parseQueryContinue $ rspBody rsp of
+                                Nothing -> return translations
+                                Just qc -> do
+                                    nextPart <- fetchTranslationsPart sourceLang phrase (Just qc)
+                                    return $ translations <+> nextPart
+                        otherwise -> error $ "Invalid HTTP response code: " ++ show (rspCode rsp)
+                    
+        parseQueryContinue :: String -> Maybe String
+        parseQueryContinue jsonString =
+            case readWikipediaJson jsonString of
+                Ok c -> Just c
+                Error _ -> Nothing
+            where
+                readWikipediaJson jsonString = let (!) = flip valFromObj in do
+                    json <- decode jsonString
+                    queryContinue <- json ! "query-continue"
+                    langlinks <- queryContinue ! "langlinks"
+                    let (JSString qc) = fromJust $ lookup "llcontinue" $ fromJSObject langlinks
+                    return $ fromJSString qc
 
-wikipediaUrl :: String -> String -> URI
-wikipediaUrl sourceLang phrase =
+
+wikipediaUrl :: String -> String -> Maybe String -> URI
+wikipediaUrl sourceLang phrase continue =
     fromJust $ parseURI url
     where
         url = concat ["http://", sourceLang, ".wikipedia.org/w/api.php?", urlEncodeVars urlArgs]
         urlArgs = [("action", "query"), ("prop", "langlinks"), ("format", "json"), ("titles", phrase)]
+                  ++ maybe [] (\c -> [("llcontinue", c)]) continue
 
 
 -- Parsing translations
 
-parseWikipediaResponse :: String -> Translations
-parseWikipediaResponse response =
-    case readWikipediaJson response of
+parseTranslations :: String -> Translations
+parseTranslations jsonString =
+    case readWikipediaJson jsonString of
         Ok t -> t
         Error msg -> Translations $ []
     where
@@ -111,8 +136,8 @@ parseWikipediaResponse response =
             query <- json ! "query"
             pages <- query ! "pages"
             let page = anySubobject pages
-            let langlinks = lookup "langlinks" $ fromJSObject page
-            readJSON . fromJust $ langlinks
+            let langlinks = fromJust $ lookup "langlinks" $ fromJSObject page
+            readJSON langlinks
         anySubobject jsonObj = subObj
             where (_, (JSObject subObj)) = head $ fromJSObject jsonObj
             
