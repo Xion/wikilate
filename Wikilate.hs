@@ -5,7 +5,10 @@
 module Wikilate where 
 
 
+import Prelude hiding (catch)
+
 import Control.Monad (when, mapM, liftM)
+import Control.Exception (catch, IOException)
 import Data.Maybe (fromJust)
 import Data.List (intercalate, intersperse)
 import Text.Regex (mkRegex, splitRegex)
@@ -26,8 +29,8 @@ main = do
     when (length args < 1) $ error "No phrase specified."
     let phrase = head args
 
-    translations <- fetchTranslations phrase opts
-    print $ translations <&> (optDestLangs opts)
+    catch (fetchTranslations phrase opts >>= print) $ \e ->
+        putStrLn $ "<Could not obtain translations: " ++ (show (e :: IOException)) ++ ">"
 
 
 -- Program options & command line
@@ -82,7 +85,8 @@ instance Show Translations where
 
 fetchTranslations :: String -> Options -> IO Translations
 fetchTranslations phrase opts = do
-    fetchTranslationsPart (optSourceLang opts) phrase Nothing
+    translations <- fetchTranslationsPart (optSourceLang opts) phrase Nothing
+    return $ translations <&> optDestLangs opts
     where
         fetchTranslationsPart :: String -> String -> Maybe String -> IO Translations
         fetchTranslationsPart sourceLang phrase continue = do
@@ -95,7 +99,7 @@ fetchTranslations phrase opts = do
                 Right rsp ->
                     case rspCode rsp of
                         (2,_,_) -> do
-                            let translations = parseTranslations $ rspBody rsp
+                            translations <- parseTranslations $ rspBody rsp
                             case parseQueryContinue $ rspBody rsp of
                                 Nothing -> return translations
                                 Just qc -> do
@@ -113,8 +117,11 @@ fetchTranslations phrase opts = do
                     json <- decode jsonString
                     queryContinue <- json ! "query-continue"
                     langlinks <- queryContinue ! "langlinks"
-                    let (JSString qc) = fromJust $ lookup "llcontinue" $ fromJSObject langlinks
-                    return $ fromJSString qc
+                    maybe (fail "Invalid query-continue specifier") (\ll ->
+                        case ll of
+                            JSString qc -> return $ fromJSString qc
+                            otherwise -> fail "No query-continue specifier found"
+                        ) $ lookup "llcontinue" $ fromJSObject langlinks
 
 
 wikipediaUrl :: String -> String -> Maybe String -> URI
@@ -128,19 +135,19 @@ wikipediaUrl sourceLang phrase continue =
 
 -- Parsing translations
 
-parseTranslations :: String -> Translations
+parseTranslations :: String -> IO Translations
 parseTranslations jsonString =
     case readWikipediaJson jsonString of
-        Ok t -> t
-        Error msg -> Translations $ []
+        Ok t -> return t
+        Error msg -> fail msg
     where
         readWikipediaJson jsonString = let (!) = flip valFromObj in do
             json <- decode jsonString
             query <- json ! "query"
             pages <- query ! "pages"
             let page = anySubobject pages
-            let langlinks = fromJust $ lookup "langlinks" $ fromJSObject page
-            readJSON langlinks
+            let langlinks = lookup "langlinks" $ fromJSObject page
+            maybe (fail "No langlinks found in JSON") readJSON $ langlinks
         anySubobject jsonObj = subObj
             where (_, (JSObject subObj)) = head $ fromJSObject jsonObj
             
