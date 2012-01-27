@@ -33,6 +33,8 @@ it's convenient to define a shell alias (e.g. in _.bash\_aliases_):
 
     alias wikilate='runghc ~/wikilate/Wikilate.hs'
 
+The <code>~/wikilate/</code> part should be appropriately adjusted, of course.
+
 ----
 
 This program is written and maintained by Karol Kuczmarski, <karol.kuczmarski@gmail.com>.
