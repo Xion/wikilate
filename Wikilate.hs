@@ -27,7 +27,7 @@ main = do
     let phrase = head args
 
     translations <- fetchTranslations phrase opts
-    print translations
+    print $ translations <&> (optDestLangs opts)
 
 
 -- Program options & command line
@@ -73,6 +73,9 @@ instance Show Translations where
 
 (<+>) :: Translations -> Translations -> Translations
 (Translations al1) <+> (Translations al2) = Translations $ al1 ++ al2
+
+(<&>) :: Translations -> [String] -> Translations
+(Translations al) <&> list = Translations $ filter ((`elem` list) . fst) al
 
 
 -- Retrieving translations
