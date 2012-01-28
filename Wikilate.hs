@@ -116,7 +116,7 @@ fetchTranslations phrase Options{..} = do
                 Ok c -> Just c
                 Error _ -> Nothing
             where
-                readWikipediaJson jsonString = let (!) = flip valFromObj in do
+                readWikipediaJson jsonString = do
                     json <- decode jsonString
                     queryContinue <- json ! "query-continue"
                     langlinks <- queryContinue ! "langlinks"
@@ -144,7 +144,7 @@ parseTranslations jsonString =
         Ok t -> return t
         Error msg -> fail msg
     where
-        readWikipediaJson jsonString = let (!) = flip valFromObj in do
+        readWikipediaJson jsonString = do
             json <- decode jsonString
             query <- json ! "query"
             pages <- query ! "pages"
@@ -163,11 +163,13 @@ instance JSON Translations where
                 langId <- jt ! "lang"
                 translated <- jt ! "*"
                 return (langId, translated)
-            (!) = flip valFromObj
     showJSON = undefined
 
 
 -- Utilities
+
+(!) :: (JSON a) => JSObject JSValue -> String -> Result a
+(!) = flip valFromObj
 
 splitBy :: String -> String -> [String] -- yes, there is no `split` by default (!)
 splitBy delim =
