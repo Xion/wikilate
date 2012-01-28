@@ -2,6 +2,7 @@
 -- Translates given phrase using different language versions of Wikipedia
 
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE RecordWildCards #-}
 
 
 module Main where 
@@ -86,13 +87,13 @@ instance Show Translations where
 -- Retrieving translations
 
 fetchTranslations :: String -> Options -> IO Translations
-fetchTranslations phrase opts = do
-    translations <- fetchTranslationsPart (optSourceLang opts) phrase Nothing
-    return $ translations <&> optDestLangs opts
+fetchTranslations phrase Options{..} = do
+    translations <- fetchTranslationsPart phrase Nothing
+    return $ translations <&> optDestLangs
     where
-        fetchTranslationsPart :: String -> String -> Maybe String -> IO Translations
-        fetchTranslationsPart sourceLang phrase continue = do
-            let url = wikipediaUrl sourceLang phrase continue
+        fetchTranslationsPart :: String -> Maybe String -> IO Translations
+        fetchTranslationsPart phrase continue = do
+            let url = wikipediaUrl optSourceLang phrase continue
             let request = Request { rqURI = url, rqMethod = GET,
                                     rqHeaders = [], rqBody = "" }
             response <- simpleHTTP request
@@ -105,7 +106,7 @@ fetchTranslations phrase opts = do
                             case parseQueryContinue $ rspBody rsp of
                                 Nothing -> return translations
                                 Just qc -> do
-                                    nextPart <- fetchTranslationsPart sourceLang phrase (Just qc)
+                                    nextPart <- fetchTranslationsPart phrase (Just qc)
                                     return $ translations `mappend` nextPart
                         otherwise -> error $ "Invalid HTTP response code: " ++ show (rspCode rsp)
                     
