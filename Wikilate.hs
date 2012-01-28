@@ -1,6 +1,8 @@
 -- Wikilate.hs
 -- Translates given phrase using different language versions of Wikipedia
 
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+
 
 module Main where 
 
@@ -11,6 +13,7 @@ import Control.Monad (when, mapM, liftM)
 import Control.Exception (catch, IOException)
 import Data.Maybe (fromJust)
 import Data.List (intercalate, intersperse)
+import Data.Monoid
 import Text.Regex (mkRegex, splitRegex)
 import Text.JSON
 import System.Environment (getArgs)
@@ -69,17 +72,15 @@ parseCmdLineArgs args =
 -- Data type to hold translations
 
 newtype Translations = Translations [(String, String)]
+                       deriving (Monoid)
+
+(<&>) :: Translations -> [String] -> Translations
+(Translations al) <&> list = Translations $ filter ((`elem` list) . fst) al
 
 instance Show Translations where
     show (Translations transAL) =
         intercalate "\n" $ translationsLines
         where translationsLines = map (\(lang, tr) -> lang ++ ": " ++ tr) transAL
-
-(<+>) :: Translations -> Translations -> Translations
-(Translations al1) <+> (Translations al2) = Translations $ al1 ++ al2
-
-(<&>) :: Translations -> [String] -> Translations
-(Translations al) <&> list = Translations $ filter ((`elem` list) . fst) al
 
 
 -- Retrieving translations
@@ -105,7 +106,7 @@ fetchTranslations phrase opts = do
                                 Nothing -> return translations
                                 Just qc -> do
                                     nextPart <- fetchTranslationsPart sourceLang phrase (Just qc)
-                                    return $ translations <+> nextPart
+                                    return $ translations `mappend` nextPart
                         otherwise -> error $ "Invalid HTTP response code: " ++ show (rspCode rsp)
                     
         parseQueryContinue :: String -> Maybe String
