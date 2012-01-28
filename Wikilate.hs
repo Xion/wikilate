@@ -104,27 +104,18 @@ fetchTranslations phrase Options{..} = do
                         (2,_,_) -> do
                             translations <- parseTranslations $ rspBody rsp
                             case parseQueryContinue $ rspBody rsp of
-                                Nothing -> return translations
-                                Just qc -> do
+                                Error _ -> return translations
+                                Ok qc -> do
                                     nextPart <- fetchTranslationsPart phrase (Just qc)
                                     return $ translations `mappend` nextPart
                         otherwise -> error $ "Invalid HTTP response code: " ++ show (rspCode rsp)
                     
-        parseQueryContinue :: String -> Maybe String
-        parseQueryContinue jsonString =
-            case readWikipediaJson jsonString of
-                Ok c -> Just c
-                Error _ -> Nothing
-            where
-                readWikipediaJson jsonString = do
-                    json <- decode jsonString
-                    queryContinue <- json ! "query-continue"
-                    langlinks <- queryContinue ! "langlinks"
-                    maybe (fail "Invalid query-continue specifier") (\ll ->
-                        case ll of
-                            JSString qc -> return $ fromJSString qc
-                            otherwise -> fail "No query-continue specifier found"
-                        ) $ lookup "llcontinue" $ fromJSObject langlinks
+        parseQueryContinue :: String -> Result String
+        parseQueryContinue jsonString = do
+            json <- decode jsonString
+            queryContinue <- json ! "query-continue"
+            langlinks <- queryContinue ! "langlinks"
+            langlinks ! "llcontinue"
 
 
 wikipediaUrl :: String -> String -> Maybe String -> URI
