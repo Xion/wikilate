@@ -15,6 +15,7 @@ import Control.Exception (catch, IOException)
 import Data.Maybe (fromJust)
 import Data.List (intercalate, intersperse)
 import Data.Monoid
+import Data.Functor (fmap)
 import Text.Regex (mkRegex, splitRegex)
 import Text.JSON
 import System.Environment (getArgs)
@@ -139,11 +140,9 @@ parseTranslations jsonString =
             json <- decode jsonString
             query <- json ! "query"
             pages <- query ! "pages"
-            let page = anySubobject pages
-            let langlinks = lookup "langlinks" $ fromJSObject page
-            maybe (fail "No langlinks found in JSON") readJSON $ langlinks
-        anySubobject jsonObj = subObj
-            where (_, (JSObject subObj)) = head $ fromJSObject jsonObj
+            let [(_, (JSObject page))] = fromJSObject pages -- the only child of "pages"
+            langlinks <- page ! "langlinks"
+            readJSON $ langlinks
             
 
 instance JSON Translations where
