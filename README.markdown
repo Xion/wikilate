@@ -1,6 +1,6 @@
 # Wikilate
 
-Use different language versions of Wikipedia for translation from the command line
+Translate phrases from command line using Wikipedia
 
 ## Usage
 
@@ -25,7 +25,7 @@ You can use standard Cabal:
     $ cd wikilate
     $ cabal install
 
-If your <code>~/.cabal/bin</code> directory is in <code>$PATH</code>, you'll should be able
+If your <code>~/.cabal/bin</code> directory is in <code>$PATH</code>, you should be able
 to use the <code>wikilate</code> command now.
 
 Alternatively, you can run the source file directly via <code>runghc</code>. In that case,
