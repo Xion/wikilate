@@ -35,7 +35,8 @@ main = do
     when (length args < 1) $ error "No phrase specified."
     let phrase = intercalate " " args
 
-    catch (fetchTranslations phrase opts >>= print) $ \e ->
+    let doFetch = fetchTranslations phrase opts >> return ()
+    catch doFetch $ \e ->
         putStrLn $ "<Could not obtain translations: " ++ (show (e :: IOException)) ++ ">"
 
 
@@ -74,7 +75,7 @@ parseCmdLineArgs args =
 -- Data type to hold translations
 
 newtype Translations = Translations [(String, String)]
-                       deriving (Monoid)
+                       deriving (Monoid, Eq)
 
 (<&>) :: Translations -> [String] -> Translations
 (Translations al) <&> list = Translations $ filter ((`elem` list) . fst) al
@@ -89,8 +90,7 @@ instance Show Translations where
 
 fetchTranslations :: String -> Options -> IO Translations
 fetchTranslations phrase Options{..} = do
-    translations <- fetchTranslationsPart phrase Nothing
-    return $ translations <&> optDestLangs
+    fetchTranslationsPart phrase Nothing
     where
         fetchTranslationsPart :: String -> Maybe String -> IO Translations
         fetchTranslationsPart phrase continue = do
@@ -104,6 +104,9 @@ fetchTranslations phrase Options{..} = do
                     case rspCode rsp of
                         (2,_,_) -> do
                             translations <- parseTranslations $ rspBody rsp
+                            let filtered = translations <&> optDestLangs
+                            when (filtered /= mempty) $
+                                putStrLn $ (show filtered)
                             case parseQueryContinue $ rspBody rsp of
                                 Error _ -> return translations
                                 Ok qc -> do
