@@ -100,19 +100,21 @@ fetchTranslations phrase Options{..} = do
             response <- simpleHTTP request
             case response of
                 Left err -> error $ "Error connecting to Wikipedia: " ++ show err
-                Right rsp ->
-                    case rspCode rsp of
-                        (2,_,_) -> do
-                            translations <- parseTranslations $ rspBody rsp
-                            let filtered = translations <&> optDestLangs
-                            when (filtered /= mempty) $
-                                putStrLn $ (show filtered)
-                            case parseQueryContinue $ rspBody rsp of
-                                Error _ -> return translations
-                                Ok qc -> do
-                                    nextPart <- fetchTranslationsPart phrase (Just qc)
-                                    return $ translations `mappend` nextPart
-                        otherwise -> error $ "Invalid HTTP response code: " ++ show (rspCode rsp)
+                Right rsp -> handleWikipediaResponse rsp
+
+        handleWikipediaResponse rsp =
+            case rspCode rsp of
+                (2,_,_) -> do
+                    translations <- parseTranslations $ rspBody rsp
+                    let filtered = translations <&> optDestLangs
+                    when (filtered /= mempty) $
+                        putStrLn $ (show filtered)
+                    case parseQueryContinue $ rspBody rsp of
+                        Error _ -> return translations
+                        Ok qc -> do
+                            nextPart <- fetchTranslationsPart phrase (Just qc)
+                            return $ translations `mappend` nextPart
+                otherwise -> error $ "Invalid HTTP response code: " ++ show (rspCode rsp)
                     
         parseQueryContinue :: String -> Result String
         parseQueryContinue jsonString = do
