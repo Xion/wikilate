@@ -5,7 +5,7 @@
 {-# LANGUAGE RecordWildCards #-}
 
 
-module Main where 
+module Main where
 
 
 import Prelude hiding (catch)
@@ -13,7 +13,8 @@ import Prelude hiding (catch)
 import Control.Monad (when, mapM, liftM)
 import Control.Exception (catch, IOException)
 import Data.Maybe (fromJust)
-import Data.List (intercalate, intersperse)
+import Data.List (intercalate)
+import Data.List.Split (splitOn)
 import Data.Monoid
 import Data.Functor (fmap)
 import Text.Regex (mkRegex, splitRegex)
@@ -27,17 +28,20 @@ import Network.URI
 
 -- Main function
 
-main :: IO ()
 main = do
     argv <- getArgs
     (opts, args) <- parseCmdLineArgs argv
 
-    when (length args < 1) $ error "No phrase specified."
+    when (length args < 1) $
+        error "No phrase specified."
     let phrase = intercalate " " args
 
     let doFetch = fetchTranslations phrase opts >> return ()
-    catch doFetch $ \e ->
-        putStrLn $ "<Could not obtain translations: " ++ (show (e :: IOException)) ++ ">"
+    catch doFetch handleError
+  where
+    handleError :: IOException -> IO ()
+    handleError e =
+        putStrLn $ "<Could not obtain translations: " ++ (show e) ++ ">"
 
 
 -- Program options & command line
@@ -58,12 +62,13 @@ cmdLineFlags =
       (ReqArg (\f opts -> opts { optSourceLang = f }) "LANG")
       "language of the source phrase"
     , Option ['d'] ["dest"]
-      (ReqArg (\f opts -> opts { optDestLangs = splitBy "," f }) "LANG[,LANG[,...]]")
+      (ReqArg (\f opts -> opts { optDestLangs = splitOn "," f })
+              "LANG[,LANG[,...]]")
       "destination language(s)"
     ]
 
 parseCmdLineArgs :: [String] -> IO (Options, [String])
-parseCmdLineArgs args = 
+parseCmdLineArgs args =
     case getOpt Permute cmdLineFlags args of
         (opts, params, [])  -> return (foldl (flip id) defaultOptions opts, params)
         (_, _, errorMsgs)   -> error $ concat ("\n":errorMsgs) ++ "\n" ++ usage
@@ -115,7 +120,7 @@ fetchTranslations phrase Options{..} = do
                             nextPart <- fetchTranslationsPart phrase (Just qc)
                             return $ translations `mappend` nextPart
                 otherwise -> error $ "Invalid HTTP response code: " ++ show (rspCode rsp)
-                    
+
         parseQueryContinue :: String -> Result String
         parseQueryContinue jsonString = do
             json <- decode jsonString
@@ -148,7 +153,7 @@ parseTranslations jsonString =
             let [(_, (JSObject page))] = fromJSObject pages -- the only child of "pages"
             langlinks <- page ! "langlinks"
             readJSON $ langlinks
-            
+
 
 instance JSON Translations where
     readJSON (JSArray jsonTrans) =
@@ -165,10 +170,3 @@ instance JSON Translations where
 
 (!) :: (JSON a) => JSObject JSValue -> String -> Result a
 (!) = flip valFromObj
-
-splitBy :: String -> String -> [String] -- yes, there is no `split` by default (!)
-splitBy delim =
-    splitRegex regexDelim
-    where
-        regexDelim = mkRegex $ escapeChars delim
-        escapeChars = ('\\':) . intersperse '\\'

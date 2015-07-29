@@ -10,4 +10,10 @@ Cabal-Version:      >=1.6
 
 Executable wikilate
     Main-is:        Wikilate.hs
-    Build-Depends:  base, regex-compat, network, HTTP, json
+    Build-Depends:  base
+                    , HTTP
+                    , json
+                    , regex-compat
+                    , network
+                    , network-uri
+                    , split
