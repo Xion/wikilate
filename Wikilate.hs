@@ -25,6 +25,9 @@ import Network.HTTP
 import Network.URI
 
 
+{-# ANN module "HLint: ignore Use string literal" #-}
+
+
 -- Main function
 
 main = do
@@ -33,13 +36,13 @@ main = do
 
     when (length args < 1) $
         error "No phrase specified."
-    let phrase = intercalate " " args
+    let phrase = unwords args
 
     catch (void $ fetchTranslations phrase opts) handleError
   where
     handleError :: IOException -> IO ()
     handleError e =
-        putStrLn $ "<Could not obtain translations: " ++ (show e) ++ ">"
+        putStrLn $ "<Could not obtain translations: " ++ show e ++ ">"
 
 
 -- Program options & command line
@@ -88,14 +91,14 @@ newtype Translations = Translations [(String, String)]
 
 instance Show Translations where
     show (Translations transAL) =
-        intercalate "\n" $ translationsLines
+        unlines translationsLines
       where
         translationsLines = map (\(lang, tr) -> lang ++ ": " ++ tr) transAL
 
 
 -- | Retrieves translations of given phrase.
 fetchTranslations :: String -> Options -> IO Translations
-fetchTranslations phrase Options{..} = do
+fetchTranslations phrase Options{..} =
     fetchTranslationsPart phrase Nothing
   where
     fetchTranslationsPart :: String -> Maybe String -> IO Translations
@@ -117,7 +120,7 @@ fetchTranslations phrase Options{..} = do
                 translations <- parseTranslations $ rspBody rsp
                 let filtered = translations <&> optDestLangs
                 when (filtered /= mempty) $
-                    putStrLn $ (show filtered)
+                    print filtered
                 case parseQueryContinue $ rspBody rsp of
                     Error _ -> return translations
                     Ok qc -> do
@@ -164,9 +167,9 @@ parseTranslations jsonString =
         query <- json ! "query"
         pages <- query ! "pages"
         -- Get the only child of "pages"
-        let [(_, (JSObject page))] = fromJSObject pages
+        let [(_, JSObject page)] = fromJSObject pages
         langlinks <- page ! "langlinks"
-        readJSON $ langlinks
+        readJSON langlinks
 
 instance JSON Translations where
     readJSON (JSArray jsonTrans) =
