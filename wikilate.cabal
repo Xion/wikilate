@@ -13,7 +13,6 @@ Executable wikilate
     Build-Depends:  base
                     , HTTP
                     , json
-                    , regex-compat
                     , network
                     , network-uri
                     , split
