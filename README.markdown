@@ -28,10 +28,3 @@ You can use standard Stack:
 If your <code>~/.local/bin</code> directory is in <code>$PATH</code>, you should be able
 to use the <code>wikilate</code> command now.
 
-Alternatively, you can run the source file directly via <code>runghc</code>. In that case,
-it's convenient to define a shell alias (e.g. in _.bash\_aliases_):
-
-    alias wikilate='stack runghc ~/wikilate/Wikilate.hs'
-
-The <code>~/wikilate/</code> part should be appropriately adjusted, of course.
-
