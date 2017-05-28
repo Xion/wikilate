@@ -20,16 +20,16 @@ import Data.Monoid
 import Text.JSON
 import System.Environment (getArgs)
 import System.Console.GetOpt
-import Network.HTTP.Base (urlEncodeVars)
+import Network.Browser
 import Network.HTTP
+import Network.HTTP.Base (Response, urlEncodeVars)
 import Network.URI
 
 
 {-# ANN module "HLint: ignore Use string literal" #-}
 
 
--- Main function
-
+main :: IO ()
 main = do
     argv <- getArgs
     (opts, args) <- parseCmdLineArgs argv
@@ -80,7 +80,7 @@ parseCmdLineArgs args =
     header = "Usage: wikilate [OPTION...] phrase"
 
 
--- | Holds translations as a mapping of (language, text),
+-- | Holds translations as an association list of (language, text),
 newtype Translations = Translations [(String, String)]
                        deriving (Monoid, Eq)
 
@@ -91,9 +91,7 @@ newtype Translations = Translations [(String, String)]
 
 instance Show Translations where
     show (Translations transAL) =
-        unlines translationsLines
-      where
-        translationsLines = map (\(lang, tr) -> lang ++ ": " ++ tr) transAL
+        unlines $ map (\(lang, tr) -> lang ++ ": " ++ tr) transAL
 
 
 -- | Retrieves translations of given phrase.
@@ -104,30 +102,36 @@ fetchTranslations phrase Options{..} =
     fetchTranslationsPart :: String -> Maybe String -> IO Translations
     fetchTranslationsPart phrase continue = do
         let url = wikipediaUrl optSourceLang phrase continue
-        let request = Request { rqURI = url
-                              , rqMethod = GET
-                              , rqHeaders = []
-                              , rqBody = ""
-                              }
-        response <- simpleHTTP request
-        case response of
-            Left err -> error $ "Error connecting to Wikipedia: " ++ show err
-            Right rsp -> handleWikipediaResponse rsp
+        handleWikipediaResponse =<< fetchUrl url
 
-    handleWikipediaResponse rsp =
-        case rspCode rsp of
+    -- | Fetch given URL and return final HTTP response, after any redirects.
+    fetchUrl :: URI -> IO (Response String)
+    fetchUrl url = browse $ do
+        -- disable logging output
+        setErrHandler $ const (return ())
+        setOutHandler $ const (return ())
+
+        setAllowRedirects True
+        (_, response) <- request $ getRequest (show url)
+        return response
+
+    handleWikipediaResponse :: Response String -> IO Translations
+    handleWikipediaResponse Response{..} =
+        case rspCode of
             (2,_,_) -> do
-                translations <- parseTranslations $ rspBody rsp
+                translations <- parseTranslations rspBody
                 let filtered = translations <&> optDestLangs
+                -- TODO: this is of course a fugly side effect;
+                -- make the entire thing into a pipe or something, with print as a step
                 when (filtered /= mempty) $
                     print filtered
-                case parseQueryContinue $ rspBody rsp of
+                case parseQueryContinue $ rspBody of
                     Error _ -> return translations
                     Ok qc -> do
                         nextPart <- fetchTranslationsPart phrase (Just qc)
                         return $ translations <> nextPart
             otherwise ->
-                error $ "Invalid HTTP response code: " ++ show (rspCode rsp)
+                error $ "Invalid HTTP response code: " ++ show rspCode
 
     parseQueryContinue :: String -> Result String
     parseQueryContinue jsonString = do

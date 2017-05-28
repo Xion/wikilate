@@ -9,7 +9,7 @@ Build-Type:         Simple
 Cabal-Version:      >=1.6
 
 Executable wikilate
-    Main-is:        Wikilate.hs
+    Main-is:        src/Main.hs
     Build-Depends:  base
                     , HTTP
                     , json

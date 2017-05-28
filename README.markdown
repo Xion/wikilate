@@ -19,22 +19,19 @@ Example:
 
 ## Installation
 
-You can use standard Cabal:
+You can use standard Stack:
 
     $ git clone git://github.com/Xion/wikilate.git
     $ cd wikilate
-    $ cabal install
+    $ stack install
 
-If your <code>~/.cabal/bin</code> directory is in <code>$PATH</code>, you should be able
+If your <code>~/.local/bin</code> directory is in <code>$PATH</code>, you should be able
 to use the <code>wikilate</code> command now.
 
 Alternatively, you can run the source file directly via <code>runghc</code>. In that case,
 it's convenient to define a shell alias (e.g. in _.bash\_aliases_):
 
-    alias wikilate='runghc ~/wikilate/Wikilate.hs'
+    alias wikilate='stack runghc ~/wikilate/Wikilate.hs'
 
 The <code>~/wikilate/</code> part should be appropriately adjusted, of course.
 
-----
-
-This program is written and maintained by Karol Kuczmarski, <karol.kuczmarski@gmail.com>.
