@@ -11,8 +11,9 @@ Cabal-Version:      >=1.6
 Executable wikilate
     Main-is:        src/Main.hs
     Build-Depends:  base
-                    , HTTP
+                    , http-client
+                    , http-client-tls
+                    , http-types
                     , json
-                    , network
-                    , network-uri
                     , split
+                    , text

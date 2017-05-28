@@ -2,6 +2,7 @@
 -- Translates given phrase using different language versions of Wikipedia
 
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RecordWildCards #-}
 
 
@@ -17,13 +18,17 @@ import Data.Maybe (fromJust)
 import Data.List (intercalate)
 import Data.List.Split (splitOn)
 import Data.Monoid
+import qualified Data.Text as Text
+import qualified Data.Text.Encoding as Text
+import qualified Data.Text.Lazy as LT
+import qualified Data.Text.Lazy.Encoding as LT
 import Text.JSON
 import System.Environment (getArgs)
 import System.Console.GetOpt
-import Network.Browser
-import Network.HTTP
-import Network.HTTP.Base (Response, urlEncodeVars)
-import Network.URI
+import qualified Network.HTTP.Client as HTTP
+import qualified Network.HTTP.Client.TLS as TLS
+import Network.HTTP.Types.Status (statusCode)
+import qualified Network.HTTP.Types.URI as URI
 
 
 {-# ANN module "HLint: ignore Use string literal" #-}
@@ -38,6 +43,7 @@ main = do
         error "No phrase specified."
     let phrase = unwords args
 
+    TLS.setGlobalManager =<< TLS.newTlsManager
     catch (void $ fetchTranslations phrase opts) handleError
   where
     handleError :: IOException -> IO ()
@@ -105,58 +111,60 @@ fetchTranslations phrase Options{..} =
         handleWikipediaResponse =<< fetchUrl url
 
     -- | Fetch given URL and return final HTTP response, after any redirects.
-    fetchUrl :: URI -> IO (Response String)
-    fetchUrl url = browse $ do
-        -- disable logging output
-        setErrHandler $ const (return ())
-        setOutHandler $ const (return ())
+    fetchUrl :: String -> IO (HTTP.Response String)
+    fetchUrl url = do
+        request <- HTTP.parseRequest url
+        manager <- TLS.getGlobalManager
+        response <- HTTP.httpLbs request manager
+        -- TODO: switch to using Text everywhere
+        return $ (LT.unpack . LT.decodeUtf8) <$> response
 
-        setAllowRedirects True
-        (_, response) <- request $ getRequest (show url)
-        return response
-
-    handleWikipediaResponse :: Response String -> IO Translations
-    handleWikipediaResponse Response{..} =
-        case rspCode of
-            (2,_,_) -> do
-                translations <- parseTranslations rspBody
+    handleWikipediaResponse :: HTTP.Response String -> IO Translations
+    handleWikipediaResponse response =
+        case status of
+            s | s >= 200, s < 299 -> do
+                translations <- parseTranslations body
                 let filtered = translations <&> optDestLangs
                 -- TODO: this is of course a fugly side effect;
                 -- make the entire thing into a pipe or something, with print as a step
                 when (filtered /= mempty) $
                     print filtered
-                case parseQueryContinue $ rspBody of
+                case parseQueryContinue body of
                     Error _ -> return translations
                     Ok qc -> do
                         nextPart <- fetchTranslationsPart phrase (Just qc)
                         return $ translations <> nextPart
             otherwise ->
-                error $ "Invalid HTTP response code: " ++ show rspCode
+                error $ "Invalid HTTP response code: " ++ show status
+      where
+        body = HTTP.responseBody response
+        status = statusCode . HTTP.responseStatus $ response
 
     parseQueryContinue :: String -> Result String
-    parseQueryContinue jsonString = do
-        json <- decode jsonString
-        queryContinue <- json ! "query-continue"
-        langlinks <- queryContinue ! "langlinks"
-        langlinks ! "llcontinue"
+    parseQueryContinue jsonString =
+        decode jsonString >>= (! "continue") >>= (! "llcontinue")
 
 
 -- | Construct Wikipedia URL for given source language, phrase,
 -- and an optional continuation token.
-wikipediaUrl :: String -> String -> Maybe String -> URI
-wikipediaUrl sourceLang phrase continue =
-    fromJust $ parseURI url
+wikipediaUrl :: String -> String -> Maybe String -> String
+wikipediaUrl sourceLang phrase continue = concat [
+    "https://"
+    , sourceLang
+    , ".wikipedia.org/w/api.php?"
+    , urlEncodeVars urlArgs
+    ]
   where
-    url = concat ["https://"
-                 , sourceLang
-                 , ".wikipedia.org/w/api.php?"
-                 , urlEncodeVars urlArgs
-                 ]
     urlArgs = [("action", "query")
               , ("prop", "langlinks")
               , ("format", "json")
               , ("titles", phrase)
               ] ++ maybe [] (\c -> [("llcontinue", c)]) continue
+    -- TODO: use better way of URL building than this conversion dance
+    urlEncodeVars = intercalate "&" . map (\(k, v) -> k <> "=" <> urlEncode v)
+    urlEncode = Text.unpack . Text.decodeUtf8
+                . URI.urlEncode True
+                . Text.encodeUtf8 . Text.pack
 
 
 -- | Parse Wikipedia response into a list of translations.
