@@ -13,7 +13,7 @@ module Main where
 import Prelude hiding (catch)
 
 import Control.Applicative ((<$>), (<*>))
-import Control.Monad (when, mapM, void, (>=>))
+import Control.Monad (when, mapM, (>=>))
 import Control.Exception (catch, IOException)
 import Data.Aeson hiding (defaultOptions, Options)
 import Data.Aeson.Types (Parser, parseEither, parseMaybe)
@@ -48,7 +48,7 @@ main = do
     let phrase = Text.pack $ unwords args
 
     TLS.setGlobalManager =<< TLS.newTlsManager
-    catch (void $ fetchTranslations phrase opts) handleError
+    catch (fetchTranslations phrase opts) handleError
   where
     handleError :: IOException -> IO ()
     handleError e =
@@ -100,22 +100,22 @@ newtype Translations = Translations [(Text, Text)]
     Translations $ filter ((`elem` list) . fst) al
 
 instance Show Translations where
-    show (Translations ts) = unlines $ map (uncurry showOne) ts
+    show (Translations ts) = intercalate "\n" $ map (uncurry showOne) ts
       where
         showOne lang t = Text.unpack lang ++ ": " ++ Text.unpack t
 
 
 -- | Retrieves translations of given phrase.
-fetchTranslations :: Text -> Options -> IO Translations
+fetchTranslations :: Text -> Options -> IO ()
 fetchTranslations phrase Options{..} =
     fetchTranslationsPart phrase Nothing
   where
-    fetchTranslationsPart :: Text -> Maybe String -> IO Translations
+    fetchTranslationsPart :: Text -> Maybe String -> IO ()
     fetchTranslationsPart phrase continue = do
         let url = wikipediaUrl optSourceLang phrase continue
         handleWikipediaResponse =<< fetchUrl url
 
-    handleWikipediaResponse :: HTTP.Response LB.ByteString -> IO Translations
+    handleWikipediaResponse :: HTTP.Response LB.ByteString -> IO ()
     handleWikipediaResponse response =
         case status of
             s | s >= 200, s < 299 -> do
@@ -123,15 +123,12 @@ fetchTranslations phrase Options{..} =
                 let filtered = translations <&> optDestLangs
                 -- TODO: this is of course a fugly side effect;
                 -- make the entire thing into a pipe or something, with print as a step
-                when (filtered /= mempty) $
+                when (filtered /= mempty) $ do
                     print filtered
                 case parseQueryContinue body of
-                    Nothing -> return translations
-                    Just qc -> do
-                        nextPart <- fetchTranslationsPart phrase (Just qc)
-                        return $ translations <> nextPart
-            otherwise ->
-                error $ "Invalid HTTP response code: " ++ show status
+                    Nothing -> return ()
+                    Just qc -> fetchTranslationsPart phrase (Just qc)
+            s -> error $ "Invalid HTTP response code: " ++ show s
       where
         body = HTTP.responseBody response
         status = statusCode . HTTP.responseStatus $ response
@@ -178,12 +175,13 @@ parseTranslations jsonString =
 
 instance FromJSON Translations where
     parseJSON = withArray "langlinks" $ \ts -> do
-        pairs <- mapM parse $ V.toList ts
-        return $ Translations pairs
+        Translations . filter (/= ("", "")) <$> mapM parse (V.toList ts)
       where
         parse :: Value -> Parser (Text, Text)
-        parse = withObject "single translation" $ \t ->
-            (,) <$> t .: "lang" <*> t .: "*"
+        parse = withObject "single translation" $ \t -> do
+            lang <- t .: "lang"
+            translation <- t .: "*"
+            return (Text.strip lang, Text.strip translation)
 
 
 -- Utility functions
