@@ -2,6 +2,7 @@
 -- Translates given phrase using different language versions of Wikipedia
 
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RecordWildCards #-}
 
@@ -12,26 +13,28 @@ module Main where
 import Prelude hiding (catch)
 
 import Control.Applicative ((<$>), (<*>))
-import Control.Monad (when, mapM, void)
+import Control.Monad (when, mapM, void, (>=>))
 import Control.Exception (catch, IOException)
-import Data.Maybe (fromJust)
+import Data.Aeson hiding (defaultOptions, Options)
+import Data.Aeson.Types (Parser, parseEither, parseMaybe)
+import qualified Data.ByteString.Lazy as LB
+import qualified Data.HashMap.Strict as HM
 import Data.List (intercalate)
 import Data.List.Split (splitOn)
+import Data.Maybe (fromJust)
 import Data.Monoid
+import Data.Vector ((!), (!?))
+import qualified Data.Vector as V
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
 import qualified Data.Text.Lazy as LT
 import qualified Data.Text.Lazy.Encoding as LT
-import Text.JSON
 import System.Environment (getArgs)
 import System.Console.GetOpt
 import qualified Network.HTTP.Client as HTTP
 import qualified Network.HTTP.Client.TLS as TLS
 import Network.HTTP.Types.Status (statusCode)
 import qualified Network.HTTP.Types.URI as URI
-
-
-{-# ANN module "HLint: ignore Use string literal" #-}
 
 
 main :: IO ()
@@ -110,28 +113,19 @@ fetchTranslations phrase Options{..} =
         let url = wikipediaUrl optSourceLang phrase continue
         handleWikipediaResponse =<< fetchUrl url
 
-    -- | Fetch given URL and return final HTTP response, after any redirects.
-    fetchUrl :: String -> IO (HTTP.Response String)
-    fetchUrl url = do
-        request <- HTTP.parseRequest url
-        manager <- TLS.getGlobalManager
-        response <- HTTP.httpLbs request manager
-        -- TODO: switch to using Text everywhere
-        return $ (LT.unpack . LT.decodeUtf8) <$> response
-
-    handleWikipediaResponse :: HTTP.Response String -> IO Translations
+    handleWikipediaResponse :: HTTP.Response LB.ByteString -> IO Translations
     handleWikipediaResponse response =
         case status of
             s | s >= 200, s < 299 -> do
-                translations <- parseTranslations body
+                translations <- either fail return $ parseTranslations body
                 let filtered = translations <&> optDestLangs
                 -- TODO: this is of course a fugly side effect;
                 -- make the entire thing into a pipe or something, with print as a step
                 when (filtered /= mempty) $
                     print filtered
                 case parseQueryContinue body of
-                    Error _ -> return translations
-                    Ok qc -> do
+                    Nothing -> return translations
+                    Just qc -> do
                         nextPart <- fetchTranslationsPart phrase (Just qc)
                         return $ translations <> nextPart
             otherwise ->
@@ -140,9 +134,12 @@ fetchTranslations phrase Options{..} =
         body = HTTP.responseBody response
         status = statusCode . HTTP.responseStatus $ response
 
-    parseQueryContinue :: String -> Result String
-    parseQueryContinue jsonString =
-        decode jsonString >>= (! "continue") >>= (! "llcontinue")
+    parseQueryContinue :: LB.ByteString -> Maybe String
+    parseQueryContinue jsonBody =
+        decode' jsonBody >>= parseMaybe parse
+      where
+        parse = withObject "continuation token" $
+            (.: "continue") >=> (.: "llcontinue")
 
 
 -- | Construct Wikipedia URL for given source language, phrase,
@@ -168,31 +165,34 @@ wikipediaUrl sourceLang phrase continue = concat [
 
 
 -- | Parse Wikipedia response into a list of translations.
-parseTranslations :: String -> IO Translations
+parseTranslations :: LB.ByteString -> Either String Translations
 parseTranslations jsonString =
-    case readWikipediaJson jsonString of
-        Ok t -> return t
-        Error msg -> fail msg
+    eitherDecode' jsonString >>= parseEither parse
   where
-    readWikipediaJson jsonString = do
-        json <- decode jsonString
-        query <- json ! "query"
-        pages <- query ! "pages"
-        -- Get the only child of "pages"
-        let [(_, JSObject page)] = fromJSObject pages
-        langlinks <- page ! "langlinks"
-        readJSON langlinks
+    parse :: Value -> Parser Translations
+    parse = withObject "Wikipedia translations" $ \o -> do
+        (Object pages) <- o .: "query" >>= (.: "pages")
+        -- Get the only child of `pages` object
+        let [(_, (Object page))] = HM.toList pages
+        page .: "langlinks"
 
-instance JSON Translations where
-    readJSON (JSArray jsonTrans) =
-        Translations <$> mapM readJSONTranslation jsonTrans
+instance FromJSON Translations where
+    parseJSON = withArray "langlinks" $ \ts -> do
+        pairs <- mapM parse $ V.toList ts
+        return $ Translations pairs
       where
-        readJSONTranslation (JSObject jt) =
-            (,) <$> jt ! "lang" <*> jt ! "*"
-    showJSON = undefined
+        parse :: Value -> Parser (String, String)
+        parse = withObject "single translation" $ \t -> (,)
+            <$> (fmap Text.unpack $ t .: "lang")
+            <*> (fmap Text.unpack $ t .: "*")
 
 
--- Utilities
+-- Utility functions
 
-(!) :: (JSON a) => JSObject JSValue -> String -> Result a
-(!) = flip valFromObj
+-- | Fetch given URL and return final HTTP response, after any redirects.
+fetchUrl :: String -> IO (HTTP.Response LB.ByteString)
+fetchUrl url = do
+    request <- HTTP.parseRequest url
+    manager <- TLS.getGlobalManager
+    response <- HTTP.httpLbs request manager
+    return response
