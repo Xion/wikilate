@@ -30,12 +30,15 @@ import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
 import qualified Data.Text.Lazy as LT
 import qualified Data.Text.Lazy.Encoding as LT
-import System.Environment (getArgs)
-import System.Console.GetOpt
 import qualified Network.HTTP.Client as HTTP
 import qualified Network.HTTP.Client.TLS as TLS
 import Network.HTTP.Types.Status (statusCode)
 import qualified Network.HTTP.Types.URI as URI
+import Pipes
+import qualified Pipes.Prelude as P
+import System.Environment (getArgs)
+import System.Console.GetOpt
+import System.IO (hPutStrLn, stderr)
 
 
 main :: IO ()
@@ -48,11 +51,15 @@ main = do
     let phrase = Text.pack $ unwords args
 
     TLS.setGlobalManager =<< TLS.newTlsManager
-    catch (fetchTranslations phrase opts) handleError
+    catch (printTranslations phrase opts) handleError
   where
+    printTranslations :: Text -> Options -> IO ()
+    printTranslations phrase opts = runEffect $
+        fetchTranslations phrase opts >-> P.print
+
     handleError :: IOException -> IO ()
     handleError e =
-        putStrLn $ "<Could not obtain translations: " ++ show e ++ ">"
+        hPutStrLn stderr $ "<Could not obtain translations: " ++ show e ++ ">"
 
 
 -- Program options & command line
@@ -105,29 +112,32 @@ instance Show Translations where
         showOne lang t = Text.unpack lang ++ ": " ++ Text.unpack t
 
 
--- | Retrieves translations of given phrase.
-fetchTranslations :: Text -> Options -> IO ()
+-- | Produces translations of given phrase.
+-- Results are streamed incrementally since Wikipedia splits the response
+-- over multiple pages of separate HTTP responses.
+fetchTranslations :: MonadIO m => Text -> Options -> Producer Translations m ()
 fetchTranslations phrase Options{..} =
     fetchTranslationsPart phrase Nothing
   where
-    fetchTranslationsPart :: Text -> Maybe String -> IO ()
+    fetchTranslationsPart :: MonadIO m => Text -> Maybe String -> Producer Translations m ()
     fetchTranslationsPart phrase continue = do
         let url = wikipediaUrl optSourceLang phrase continue
-        handleWikipediaResponse =<< fetchUrl url
+        (ts, continue) <- liftIO $ handleWikipediaResponse =<< fetchUrl url
+        when (ts /= mempty) $
+            yield ts
+        case continue of
+            Nothing -> return ()
+            Just c -> fetchTranslationsPart phrase (Just c)
 
-    handleWikipediaResponse :: HTTP.Response LB.ByteString -> IO ()
+    -- | Process response from Wikipedia, returning translations + continuation token.
+    handleWikipediaResponse :: HTTP.Response LB.ByteString -> IO (Translations, Maybe String)
     handleWikipediaResponse response =
         case status of
             s | s >= 200, s < 299 -> do
                 translations <- either fail return $ parseTranslations body
                 let filtered = translations <&> optDestLangs
-                -- TODO: this is of course a fugly side effect;
-                -- make the entire thing into a pipe or something, with print as a step
-                when (filtered /= mempty) $ do
-                    print filtered
-                case parseQueryContinue body of
-                    Nothing -> return ()
-                    Just qc -> fetchTranslationsPart phrase (Just qc)
+                let qc = parseQueryContinue body
+                return (filtered, qc)
             s -> error $ "Invalid HTTP response code: " ++ show s
       where
         body = HTTP.responseBody response

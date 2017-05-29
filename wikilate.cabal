@@ -1,6 +1,6 @@
 Name:               wikilate
 Version:            0.1
-Description:        Command-line translator which uses Wikipedia as dictionary
+Description:        Command-line translator using Wikipedia as a dictionary
 License:            MIT
 Author:             Karol Kuczmarski "Xion" <karol.kuczmarski@gmail.com>
 Maintainer:         Karol Kuczmarski "Xion" <karol.kuczmarski@gmail.com>
@@ -16,6 +16,7 @@ Executable wikilate
                     , http-client
                     , http-client-tls
                     , http-types
+                    , pipes
                     , split
                     , text
                     , unordered-containers
