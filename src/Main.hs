@@ -25,6 +25,7 @@ import Data.Maybe (fromJust)
 import Data.Monoid
 import Data.Vector ((!), (!?))
 import qualified Data.Vector as V
+import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
 import qualified Data.Text.Lazy as LT
@@ -44,7 +45,7 @@ main = do
 
     when (length args < 1) $
         error "No phrase specified."
-    let phrase = unwords args
+    let phrase = Text.pack $ unwords args
 
     TLS.setGlobalManager =<< TLS.newTlsManager
     catch (void $ fetchTranslations phrase opts) handleError
@@ -57,8 +58,8 @@ main = do
 -- Program options & command line
 
 data Options = Options
-    { optSourceLang :: String
-    , optDestLangs :: [String]
+    { optSourceLang :: Text
+    , optDestLangs :: [Text]
     }
 
 defaultOptions = Options
@@ -69,10 +70,10 @@ defaultOptions = Options
 cmdLineFlags :: [OptDescr (Options -> Options)]
 cmdLineFlags =
     [ Option ['s'] ["source"]
-      (ReqArg (\f opts -> opts { optSourceLang = f }) "LANG")
+      (ReqArg (\f opts -> opts { optSourceLang = Text.pack f }) "LANG")
       "language of the source phrase"
     , Option ['d'] ["dest"]
-      (ReqArg (\f opts -> opts { optDestLangs = splitOn "," f })
+      (ReqArg (\f opts -> opts { optDestLangs = Text.pack <$> splitOn "," f })
               "LANG[,LANG[,...]]")
       "destination language(s)"
     ]
@@ -90,25 +91,26 @@ parseCmdLineArgs args =
 
 
 -- | Holds translations as an association list of (language, text),
-newtype Translations = Translations [(String, String)]
+newtype Translations = Translations [(Text, Text)]
                        deriving (Monoid, Eq)
 
 -- | Filter translations through a list of languages.
-(<&>) :: Translations -> [String] -> Translations
+(<&>) :: Translations -> [Text] -> Translations
 (Translations al) <&> list =
     Translations $ filter ((`elem` list) . fst) al
 
 instance Show Translations where
-    show (Translations transAL) =
-        unlines $ map (\(lang, tr) -> lang ++ ": " ++ tr) transAL
+    show (Translations ts) = unlines $ map (uncurry showOne) ts
+      where
+        showOne lang t = Text.unpack lang ++ ": " ++ Text.unpack t
 
 
 -- | Retrieves translations of given phrase.
-fetchTranslations :: String -> Options -> IO Translations
+fetchTranslations :: Text -> Options -> IO Translations
 fetchTranslations phrase Options{..} =
     fetchTranslationsPart phrase Nothing
   where
-    fetchTranslationsPart :: String -> Maybe String -> IO Translations
+    fetchTranslationsPart :: Text -> Maybe String -> IO Translations
     fetchTranslationsPart phrase continue = do
         let url = wikipediaUrl optSourceLang phrase continue
         handleWikipediaResponse =<< fetchUrl url
@@ -144,8 +146,8 @@ fetchTranslations phrase Options{..} =
 
 -- | Construct Wikipedia URL for given source language, phrase,
 -- and an optional continuation token.
-wikipediaUrl :: String -> String -> Maybe String -> String
-wikipediaUrl sourceLang phrase continue = concat [
+wikipediaUrl :: Text -> Text -> Maybe String -> String
+wikipediaUrl sourceLang phrase continue = Text.unpack $ Text.concat [
     "https://"
     , sourceLang
     , ".wikipedia.org/w/api.php?"
@@ -156,12 +158,10 @@ wikipediaUrl sourceLang phrase continue = concat [
               , ("prop", "langlinks")
               , ("format", "json")
               , ("titles", phrase)
-              ] ++ maybe [] (\c -> [("llcontinue", c)]) continue
-    -- TODO: use better way of URL building than this conversion dance
-    urlEncodeVars = intercalate "&" . map (\(k, v) -> k <> "=" <> urlEncode v)
-    urlEncode = Text.unpack . Text.decodeUtf8
-                . URI.urlEncode True
-                . Text.encodeUtf8 . Text.pack
+              ] ++ maybe [] (\c -> [("llcontinue", Text.pack c)]) continue
+    urlEncodeVars =
+        Text.intercalate "&" . map (\(k, v) -> k <> "=" <> urlEncode v)
+    urlEncode = Text.decodeUtf8 . URI.urlEncode True . Text.encodeUtf8
 
 
 -- | Parse Wikipedia response into a list of translations.
@@ -181,10 +181,9 @@ instance FromJSON Translations where
         pairs <- mapM parse $ V.toList ts
         return $ Translations pairs
       where
-        parse :: Value -> Parser (String, String)
-        parse = withObject "single translation" $ \t -> (,)
-            <$> (fmap Text.unpack $ t .: "lang")
-            <*> (fmap Text.unpack $ t .: "*")
+        parse :: Value -> Parser (Text, Text)
+        parse = withObject "single translation" $ \t ->
+            (,) <$> t .: "lang" <*> t .: "*"
 
 
 -- Utility functions
