@@ -122,7 +122,8 @@ fetchTranslations Options{..} =
     fetchTranslationsPart :: MonadIO m => Maybe String -> Producer Translations m ()
     fetchTranslationsPart continue = do
         let url = wikipediaUrl optSourceLang optPhrase continue
-        (ts, continue) <- liftIO $ handleWikipediaResponse =<< fetchUrl url
+        response <- liftIO $ fetchUrl url
+        (ts, continue) <- either fail return $ handleWikipediaResponse response
         when (ts /= mempty) $
             yield ts
         case continue of
@@ -130,15 +131,16 @@ fetchTranslations Options{..} =
             Just c -> fetchTranslationsPart (Just c)
 
     -- | Process response from Wikipedia, returning translations + continuation token.
-    handleWikipediaResponse :: HTTP.Response LB.ByteString -> IO (Translations, Maybe String)
+    handleWikipediaResponse :: HTTP.Response LB.ByteString
+                            -> Either String (Translations, Maybe String)
     handleWikipediaResponse response =
         case status of
             s | s >= 200, s < 299 -> do
-                translations <- either fail return $ parseTranslations body
+                translations <- parseTranslations body
                 let filtered = translations <&> optDestLangs
                 let qc = parseQueryContinue body
-                return (filtered, qc)
-            s -> error $ "Invalid HTTP response code: " ++ show s
+                Right (filtered, qc)
+            s -> Left $ "Invalid HTTP response code: " ++ show s
       where
         body = HTTP.responseBody response
         status = statusCode . HTTP.responseStatus $ response
