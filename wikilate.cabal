@@ -22,3 +22,8 @@ Executable wikilate
                     , text
                     , unordered-containers
                     , vector
+    GHC-Options:    -O2
+                    -fwarn-tabs
+                    -fwarn-incomplete-patterns
+                    -fwarn-unused-imports
+                    -fwarn-missing-signatures

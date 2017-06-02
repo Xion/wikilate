@@ -12,24 +12,19 @@ module Main where
 
 import Prelude hiding (catch)
 
-import Control.Applicative ((<$>), (<*>))
 import Control.Monad (when, mapM, (>=>))
 import Control.Exception (catch, IOException)
-import Data.Aeson hiding (defaultOptions, Options)
+import Data.Aeson hiding (Options)
 import Data.Aeson.Types (Parser, parseEither, parseMaybe)
 import qualified Data.ByteString.Lazy as LB
 import qualified Data.HashMap.Strict as HM
 import Data.List (intercalate)
 import Data.List.Split (splitOn)
-import Data.Maybe (fromJust)
 import Data.Monoid
-import Data.Vector ((!), (!?))
 import qualified Data.Vector as V
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
-import qualified Data.Text.Lazy as LT
-import qualified Data.Text.Lazy.Encoding as LT
 import qualified Network.HTTP.Client as HTTP
 import qualified Network.HTTP.Client.TLS as TLS
 import Network.HTTP.Types.Status (statusCode)
@@ -38,7 +33,6 @@ import Options.Applicative hiding (Parser)
 import qualified Options.Applicative as OA
 import Pipes
 import qualified Pipes.Prelude as P
-import System.Environment (getArgs)
 import System.IO (hPutStrLn, stderr)
 
 
