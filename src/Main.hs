@@ -34,28 +34,22 @@ import qualified Network.HTTP.Client as HTTP
 import qualified Network.HTTP.Client.TLS as TLS
 import Network.HTTP.Types.Status (statusCode)
 import qualified Network.HTTP.Types.URI as URI
+import Options.Applicative hiding (Parser)
+import qualified Options.Applicative as OA
 import Pipes
 import qualified Pipes.Prelude as P
 import System.Environment (getArgs)
-import System.Console.GetOpt
 import System.IO (hPutStrLn, stderr)
 
 
 main :: IO ()
 main = do
-    argv <- getArgs
-    (opts, args) <- parseCmdLineArgs argv
-
-    when (length args < 1) $
-        error "No phrase specified."
-    let phrase = Text.pack $ unwords args
-
+    opts <- execParser commandLine
     TLS.setGlobalManager =<< TLS.newTlsManager
-    catch (printTranslations phrase opts) handleError
+    catch (printTranslations opts) handleError
   where
-    printTranslations :: Text -> Options -> IO ()
-    printTranslations phrase opts = runEffect $
-        fetchTranslations phrase opts >-> P.print
+    printTranslations :: Options -> IO ()
+    printTranslations opts = runEffect $ fetchTranslations opts >-> P.print
 
     handleError :: IOException -> IO ()
     handleError e =
@@ -67,34 +61,40 @@ main = do
 data Options = Options
     { optSourceLang :: Text
     , optDestLangs :: [Text]
+    , optPhrase :: Text
     }
 
-defaultOptions = Options
-    { optSourceLang = "en"
-    , optDestLangs = ["de", "fr", "es", "pl"]
-    }
-
-cmdLineFlags :: [OptDescr (Options -> Options)]
-cmdLineFlags =
-    [ Option ['s'] ["source"]
-      (ReqArg (\f opts -> opts { optSourceLang = Text.pack f }) "LANG")
-      "language of the source phrase"
-    , Option ['d'] ["dest"]
-      (ReqArg (\f opts -> opts { optDestLangs = Text.pack <$> splitOn "," f })
-              "LANG[,LANG[,...]]")
-      "destination language(s)"
-    ]
-
-parseCmdLineArgs :: [String] -> IO (Options, [String])
-parseCmdLineArgs args =
-    case getOpt Permute cmdLineFlags args of
-        (opts, params, []) ->
-            return (foldl (flip id) defaultOptions opts, params)
-        (_, _, errorMsgs) ->
-            error $ concat ("\n":errorMsgs) ++ "\n" ++ usage
+-- | Parser for command line options, written in the optparse-applicative style.
+options :: OA.Parser Options
+options = pure Options
+    <*> option text
+        ( long "source"
+        <> short 's'
+        <> value "en"  -- default
+        <> metavar "LANG"
+        <> showDefault
+        <> help "Source language of the phrase")
+    <*> option csv
+        ( long "dest"
+        <> short 'd'
+        <> value ["de", "fr", "es", "pl"]  -- default
+        <> metavar "LANG[,LANG[,...]]"
+        <> showDefaultWith (Text.unpack . Text.intercalate ",")
+        <> help "Languages to translate to")
+    <*> argument text
+        ( metavar "PHRASE"
+        <> help "Phrase to translate")
   where
-    usage = usageInfo header cmdLineFlags
-    header = "Usage: wikilate [OPTION...] phrase"
+    -- Custom argument readers (converters)
+    text = OA.maybeReader $ Just . Text.pack
+    csv = OA.maybeReader $ Just . map (Text.strip . Text.pack) . (splitOn ",")
+
+-- | Full parse for the command line, with proper help display.
+commandLine :: OA.ParserInfo Options
+commandLine = info (options <**> helper)
+    ( fullDesc
+    <> progDesc "Translate the PHRASE using Wikipedia"
+    <> header "wikilate -- Wikipedia-based translator")
 
 
 -- | Holds translations as an association list of (language, text),
@@ -115,19 +115,19 @@ instance Show Translations where
 -- | Produces translations of given phrase.
 -- Results are streamed incrementally since Wikipedia splits the response
 -- over multiple pages of separate HTTP responses.
-fetchTranslations :: MonadIO m => Text -> Options -> Producer Translations m ()
-fetchTranslations phrase Options{..} =
-    fetchTranslationsPart phrase Nothing
+fetchTranslations :: MonadIO m => Options -> Producer Translations m ()
+fetchTranslations Options{..} =
+    fetchTranslationsPart Nothing
   where
-    fetchTranslationsPart :: MonadIO m => Text -> Maybe String -> Producer Translations m ()
-    fetchTranslationsPart phrase continue = do
-        let url = wikipediaUrl optSourceLang phrase continue
+    fetchTranslationsPart :: MonadIO m => Maybe String -> Producer Translations m ()
+    fetchTranslationsPart continue = do
+        let url = wikipediaUrl optSourceLang optPhrase continue
         (ts, continue) <- liftIO $ handleWikipediaResponse =<< fetchUrl url
         when (ts /= mempty) $
             yield ts
         case continue of
             Nothing -> return ()
-            Just c -> fetchTranslationsPart phrase (Just c)
+            Just c -> fetchTranslationsPart (Just c)
 
     -- | Process response from Wikipedia, returning translations + continuation token.
     handleWikipediaResponse :: HTTP.Response LB.ByteString -> IO (Translations, Maybe String)

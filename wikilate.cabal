@@ -16,6 +16,7 @@ Executable wikilate
                     , http-client
                     , http-client-tls
                     , http-types
+                    , optparse-applicative
                     , pipes
                     , split
                     , text
