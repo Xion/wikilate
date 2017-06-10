@@ -16,9 +16,9 @@ Executable wikilate
                     , http-client
                     , http-client-tls
                     , http-types
-                    , optparse-applicative
+                    , optparse-applicative >= 0.14
                     , pipes
-                    , split
+                    , regex-tdfa
                     , text
                     , unordered-containers
                     , vector

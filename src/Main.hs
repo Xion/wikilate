@@ -1,6 +1,7 @@
 -- Wikilate.hs
 -- Translates given phrase using different language versions of Wikipedia
 
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
@@ -19,7 +20,7 @@ import Data.Aeson.Types (Parser, parseEither, parseMaybe)
 import qualified Data.ByteString.Lazy as LB
 import qualified Data.HashMap.Strict as HM
 import Data.List (intercalate)
-import Data.List.Split (splitOn)
+import Data.Maybe (fromMaybe)
 import Data.Monoid
 import qualified Data.Vector as V
 import Data.Text (Text)
@@ -34,14 +35,17 @@ import qualified Options.Applicative as OA
 import Pipes
 import qualified Pipes.Prelude as P
 import System.IO (hPutStrLn, stderr)
+import Text.Regex.TDFA
 
 
 main :: IO ()
 main = do
-    opts <- execParser commandLine
+    opts <- customExecParser parserPrefs commandLine
     TLS.setGlobalManager =<< TLS.newTlsManager
     catch (printTranslations opts) handleError
   where
+    parserPrefs = defaultPrefs { prefDisambiguate = True }
+
     printTranslations :: Options -> IO ()
     printTranslations opts = runEffect $ fetchTranslations opts >-> P.print
 
@@ -58,10 +62,18 @@ data Options = Options
     , optPhrase :: Text
     }
 
+-- | Full parse for the command line, with proper help display.
+commandLine :: OA.ParserInfo Options
+commandLine = info (options <**> helper)
+    ( fullDesc
+    <> progDesc "Translate the PHRASE using Wikipedia"
+    <> header "wikilate -- Wikipedia-based translator"
+    <> failureCode 2)
+
 -- | Parser for command line options, written in the optparse-applicative style.
 options :: OA.Parser Options
 options = pure Options
-    <*> option text
+    <*> option str
         ( long "source"
         <> short 's'
         <> value "en"  -- default
@@ -75,20 +87,77 @@ options = pure Options
         <> metavar "LANG[,LANG[,...]]"
         <> showDefaultWith (Text.unpack . Text.intercalate ",")
         <> help "Languages to translate to")
-    <*> argument text
-        ( metavar "PHRASE"
+    <*> argument str
+        ( completer (mkCompleter completePhrase)
+        <> metavar "PHRASE"
         <> help "Phrase to translate")
   where
     -- Custom argument readers (converters)
-    text = OA.maybeReader $ Just . Text.pack
-    csv = OA.maybeReader $ Just . map (Text.strip . Text.pack) . (splitOn ",")
+    csv = OA.maybeReader $ Just . map Text.strip . (Text.splitOn ",") . Text.pack
 
--- | Full parse for the command line, with proper help display.
-commandLine :: OA.ParserInfo Options
-commandLine = info (options <**> helper)
-    ( fullDesc
-    <> progDesc "Translate the PHRASE using Wikipedia"
-    <> header "wikilate -- Wikipedia-based translator")
+
+-- | Argument completion for PHRASE.
+-- Looks up Wikipedia for the list of articles starting with given prefix.
+completePhrase :: String -> IO [String]
+completePhrase partial = do
+    let
+      -- TODO: get the actual sourceLang here somehow
+      url = wikipediaPrefixSearchUrl "en" (Text.pack partial)
+    response <- fetchUrl url
+    if is2xx (status response) then
+      do
+        let body = HTTP.responseBody response
+        return $ map Text.unpack $ cleanupResults . parseResults $ body
+      else return [partial]
+  where
+    status = statusCode . HTTP.responseStatus
+    is2xx s = 200 <= s && s < 299
+
+    parseResults :: LB.ByteString -> [Text]
+    parseResults jsonBody =
+        let results = fromMaybe [] $ decode' jsonBody >>= parseMaybe parse
+        in map Text.pack results
+      where
+        parse = withObject "search results" $
+            (.: "query") >=> (.: "prefixsearch") >=> mapM (.: "title")
+
+    cleanupResults = map cleanup
+      where
+        cleanup r = Text.pack $ subRegex trailingParenRegex (Text.unpack r) ""
+        trailingParenRegex = mkRegex "[[:space:]]+\\([^)]+\\)$" -- " (bar)" in "Foo (bar)"
+
+        -- Below is just some boilerplate to make regex-tdfa expose a sane interface.
+
+        mkRegex :: String -> Regex
+        mkRegex s = make s
+          where
+            make :: RegexMaker Regex CompOption ExecOption String => String -> Regex
+            make = makeRegex
+
+        subRegex :: Regex -> String -> String -> String
+        subRegex re input repl = subs input
+          where
+            subs s = fromMaybe s $ do
+                (before, match, after) <- matchM re s :: Maybe (String, String, String)
+                when (null match) $
+                    error $ "Internal error in (subRegex" ++ "<regex>" ++ " " ++ s ++ ")"
+                return $ before ++ repl ++ subs after
+
+
+-- | URL to Wikipedia API endpoint for performing prefix searches.
+wikipediaPrefixSearchUrl :: Text -> Text -> String
+wikipediaPrefixSearchUrl sourceLang prefix = Text.unpack $ Text.concat
+    [ "https://"
+    , sourceLang
+    , ".wikipedia.org/w/api.php?"
+    , mkQueryString urlArgs ]
+  where
+    urlArgs = [("action", "query")
+              , ("list", "prefixsearch")
+              , ("format", "json")
+              , ("pssearch", prefix)
+              , ("pslimit", Text.pack . show $ maxResults)]
+    maxResults = 20
 
 
 -- | Holds translations as an association list of (language, text),
@@ -115,7 +184,7 @@ fetchTranslations Options{..} =
   where
     fetchTranslationsPart :: MonadIO m => Maybe String -> Producer Translations m ()
     fetchTranslationsPart continue = do
-        let url = wikipediaUrl optSourceLang optPhrase continue
+        let url = wikipediaLangLinksUrl optSourceLang optPhrase continue
         response <- liftIO $ fetchUrl url
         (ts, continue) <- either fail return $ handleWikipediaResponse response
         when (ts /= mempty) $
@@ -149,12 +218,12 @@ fetchTranslations Options{..} =
 
 -- | Construct Wikipedia URL for given source language, phrase,
 -- and an optional continuation token.
-wikipediaUrl :: Text -> Text -> Maybe String -> String
-wikipediaUrl sourceLang phrase continue = Text.unpack $ Text.concat [
+wikipediaLangLinksUrl :: Text -> Text -> Maybe String -> String
+wikipediaLangLinksUrl sourceLang phrase continue = Text.unpack $ Text.concat [
     "https://"
     , sourceLang
     , ".wikipedia.org/w/api.php?"
-    , urlEncodeVars urlArgs
+    , mkQueryString urlArgs
     ]
   where
     urlArgs = [("action", "query")
@@ -162,9 +231,6 @@ wikipediaUrl sourceLang phrase continue = Text.unpack $ Text.concat [
               , ("format", "json")
               , ("titles", phrase)
               ] ++ maybe [] (\c -> [("llcontinue", Text.pack c)]) continue
-    urlEncodeVars =
-        Text.intercalate "&" . map (\(k, v) -> k <> "=" <> urlEncode v)
-    urlEncode = Text.decodeUtf8 . URI.urlEncode True . Text.encodeUtf8
 
 
 -- | Parse Wikipedia response into a list of translations.
@@ -199,3 +265,9 @@ fetchUrl url = do
     manager <- TLS.getGlobalManager
     response <- HTTP.httpLbs request manager
     return response
+
+-- | URL-encodes a list of key-value pairs to make a query string.
+mkQueryString :: [(Text, Text)] -> Text
+mkQueryString = Text.intercalate "&" . map (\(k, v) -> k <> "=" <> encode v)
+  where
+    encode = Text.decodeUtf8 . URI.urlEncode True . Text.encodeUtf8
